@@ -1,0 +1,205 @@
+---
+title: "Project 2 - Multiple Time Memory - An Qi Zhang"
+author: "An Qi Zhang (1002229796)"
+date: "2020/04/18"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+### Import the required libraries.
+library(tidyverse)
+library(dplyr)
+library(magrittr) 
+library(broom) # This library provides the tidy() function used for multiple t-tests in section 4
+```
+
+## 1. Summary of the Results
+This section shows the mean and standard deviation of time each group of mice spent within the stimulus-paired or stimulus-unpaired chamber during either the habituation session or the testing session.
+
+```{r data, echo=FALSE, message=FALSE, warning=FALSE}
+### set working directory to where data is located and read in data
+setwd("~/GitHub/Project2-AnnZhang1997")
+data <- read_csv('MTMmice.csv')
+
+### Reorganize and recode data
+# Wrangle data into long format, so that among the 4 original columns ("hab-paired", "hab-unpaired", "test-paired", and "test-unpaired"), "hab" and "test" will become keys, while the original values will be gathered under two new columns "paired-duration" and "unpaired-duration". 
+data.1 <- data %>%
+  gather(key = "paired", value = "paired-duration", "hab-paired", "test-paired") %>%
+  gather(key = "unpaired", value = "unpaired-duration", "hab-unpaired", "test-unpaired") %>% # Two gather commands are used to gather the data under two new value columns
+  separate(paired, into=c('pairedsession','pairedchamber'), sep="-") %>% 
+  separate(unpaired, into=c('unpairedsession','unpairedchamber'), sep="-") %>%
+  filter(pairedsession == unpairedsession) %>% # remove duplicate data
+  select(-c(unpairedsession, pairedchamber, unpairedchamber, slot)) # remove the columns that won't be used during data processing (pairedchamber, unpairedchamber, and slot) and the column that is the duplicate of another column (unpairedsession of pairedsession)
+
+# Rename the variables. Teststim to stimulus, subjectnum to subject, TestON to on, pairedsession to session.
+data.1 <- rename(data.1, stimulus=Teststim, subject=subjectnum, on=TestON, session=pairedsession,
+                 paired="paired-duration", unpaired="unpaired-duration")
+
+# Calculate the difference of time each mouse spent within the paired chamber and the unpaired chamber for during each session.
+data.1$difference = data.1$paired-data.1$unpaired
+
+# Divide the data based on the stimulus the animal is tested for, so that one set of data will contain all data of the preference (cpp) groups, and the other set of data will contain all data of the avoidance (cpa) groups.
+cppdata <- filter(data.1, stimulus == "CPP")
+cpadata <- filter(data.1, stimulus == "CPA")
+
+# Rename values of session.
+cppdata$session <- recode_factor(cppdata$session, "hab"="CPPhabituation", "test"="CPPtest")
+cpadata$session <- recode_factor(cpadata$session, "hab"="CPAhabituation", "test"="CPAtest")
+
+# Remove the column recording CPA information from the cppdata, and vice versa.
+cppdata <- select(cppdata, -c(CPA))
+cpadata <- select(cpadata, -c(CPP))
+
+# Seperate the information of the testing session of the respective stimulus into two new columns recording the pattern of the chamber that is paired with the stimulus (pattern), and the time of day the training of the stimulus was given (time).
+cppdata <- cppdata %>% 
+  separate(CPP, into=c('pattern','time'), sep=" at ")
+cpadata <- cpadata %>% 
+  separate(CPA, into=c('pattern','time'), sep=" at ")
+
+# Summarize the mean and standard deviation of seconds that each group of mice tested for preference spent within the stimulus-paired or stimulus-unpaired chamber during either session.
+cpp_summary <- cppdata %>%
+  group_by(session, on) %>%
+  summarise(paired_dwell_time = mean(paired), unpaired_dwell_time=mean(unpaired), 
+            preference=mean(difference))
+# Summarize the mean and standard deviation of seconds that each group of mice tested for avoidance spent within the stimulus-paired or stimulus-unpaired chamber during either session.
+cpa_summary <- cpadata %>%
+  group_by(session, on) %>%
+  summarise(paired_dwell_time = mean(paired), unpaired_dwell_time=mean(unpaired), 
+            preference=mean(difference))
+
+# Join the summaries together into an overall summary on the mean and standard deviation of seconds that each group spent within either chamber during either session for all the experiment groups.
+data_summary <- full_join(cpp_summary,cpa_summary)
+data_summary # Print out the overall summary.
+```
+## 2. Effect of Chamber Patterns on Chamber Preference (Control)
+This section shows the average amount of time mice spent within a distinct chamber during the habituation session. The chambers only differ in the pattern they have on their walls, and the mice had not received any stimulus within any of the chambers.
+The purpose of this section to show is that there is no initial preference or avoidance for the patterns themselves, and any preference or avoidance for a chamber shown during the testing session is due to the training stimulus the mouse received within the chamber.
+
+## 2.1 Effect of Chamber Patterns on Chamber Preference - ANOVA Result
+```{r patternaov, echo=FALSE, message=FALSE, warning=FALSE}
+# Join the cpp data and cpp data together. As in this section all data that involves the stimulus will not be used.
+cppcpa <- full_join(cppdata, cpadata)
+
+patterndata <- cppcpa %>%
+  filter(session=="CPPhabituation"| session=="CPAhabituation") %>% # Filter the data so that only the habituation session data is included.
+  select(pattern, paired) %>% # pattern is the independent variable and paired is the dependent variable.
+  mutate_if(is.character, as.factor)
+
+patternaov <- aov(paired ~ pattern, data=patterndata)
+summary(patternaov) # Print out the ANOVA results
+```
+## 2.2 Effect of Chamber Patterns on Chamber Preference - Plot
+```{r patternplot, echo=FALSE, message=FALSE, warning=FALSE}
+# Compute the means and standard deviations for the dwell time corresponding with each pattern.
+patterndata <- cppcpa %>%
+  group_by(pattern) %>%
+  filter(session=="CPPhabituation"| session=="CPAhabituation")%>% # Filter the data so that only the habituation session data is included.
+  summarise(mean=mean(paired), sd=sd(paired))
+
+# Plot the average dwell time of each chamber into a bar graph, with x-axis being the pattern of the chamber and the y-axis being the mean dwell time.
+patternplot <- patterndata %>%
+  ggplot(aes(x=pattern,y=mean, fill=pattern)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x='chamber pattern',y='mean dwell time (seconds)',title='Initial Preference for Chamber Pattern') +
+  scale_fill_grey() +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+                position=position_dodge(.9)) # Add on the error bars indicating the standard deviation.
+patternplot # Print out the plot
+```
+## 3. Effect of Conditioning on Chamber Preference
+This section shows the average amount of time mice spent within a distinct chamber during the habituation and testing session for either the CPA group or CPP group. 
+The purpose of this section is to show whether training would have an effect on the preference of the chambers. And whether this change is effected by the type of stimulus used during training.
+
+
+## 3.1 Effect of Conditioning on Chamber Preference - ANOVA Results
+```{r conditioningaov, echo=FALSE, message=FALSE, warning=FALSE}
+# ANOVA is run on the cpp data to determine the influence of chamber and training on dwell time.
+# The independent variables are session (habituation or testing) and chamber (paired and unpaired). 
+cppaovdata <- cppdata %>% 
+  gather(paired:unpaired,key=chamber,value=dwelltime) %>%
+  select(session, chamber, dwelltime) %>%
+  mutate_if(is.character, as.factor) # Mutate session's and chamber's values to factors.
+cppaov <- aov(dwelltime ~ session + chamber, data=cppaovdata) # Perform ANOVA
+anova(cppaov) # Print out cpp ANOVA results
+
+# The same procedure is repeated for the cpa data.
+cpaaovdata <- cpadata %>%
+  gather(paired:unpaired,key=chamber,value=dwelltime) %>%
+  select(session, chamber, dwelltime) %>%
+  mutate_if(is.character, as.factor)
+cpaaov <- aov(dwelltime ~ session + chamber, data=cpaaovdata)
+anova(cpaaov) # Print out cpa ANOVA results
+```
+
+## 3.2 Effect of Conditioning on Chamber Preference - Plots
+```{r conditioningplot, echo=FALSE, message=FALSE, warning=FALSE}
+# The plots corresponding with the ANOVA analysis in section 3.1 are generated.
+
+# First, compute the mean and standard deviation of dwell time, which would be used to generate the plots.
+cppdata.1 <- cppdata %>%
+  gather(paired:unpaired,key=chamber,value=dwelltime) %>% 
+  group_by(session, chamber) %>% # The data is grouped by the independent variables.
+  summarise(mean=mean(dwelltime), sd=sd(dwelltime))
+
+# Then, generate the plot.
+cppplot <- cppdata.1 %>% 
+  ggplot(aes(x=session, y=mean, color=chamber))+
+  geom_bar(stat="identity", aes(fill=chamber), position = "dodge") +
+  scale_fill_grey() +
+  labs(x='Session',y='mean dwell time',title='Mean Dwell Time in Each chamber Before and After CPP Conditioning (seconds)') +
+  scale_color_manual("chamber", values = c("black", "black")) +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+                position=position_dodge(.9))
+cppplot # Finally, print out the cpp plot.
+
+# Repeat above procedures for cpa data.
+cpadata.1 <- cpadata %>%
+  gather(paired:unpaired,key=chamber,value=dwelltime) %>% 
+  group_by(session, chamber) %>%
+  summarise(mean=mean(dwelltime), sd=sd(dwelltime))
+
+cpaplot <- cpadata.1 %>%
+  ggplot(aes(x=session, y=mean, color=chamber))+
+  geom_bar(stat="identity", aes(fill=chamber), position = "dodge") +
+  scale_fill_grey() +
+  scale_color_manual("chamber", values = c("black", "black")) +
+  labs(x='Session',y='mean dwell time',title='Mean Dwell Time in Each chamber Before and After CPA Conditioning (seconds)') +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+                position=position_dodge(.9))
+
+cpaplot # Print out the cpa plot
+```
+## 4. Effect of the Time of Day on Chamber Preference
+This section shows the average amount of seconds mice spent within the paired and unpaired chamber for Circadian Time 4 and Circadian Time 11 during the testing session for both experimental groups. 
+The purpose of this section is to demonstrate whether the circadian time of day have an effect on the preference of the chambers.
+
+## 4.1 Effect of the Time of Day on Chamber Preference - T-Test
+```{r timetest, echo=FALSE, warning=FALSE, message=FALSE}
+# Create the a new dataframe that has only the necessary data for this question
+timedata <- cppcpa %>%
+  filter(session=="CPPtest"| session=="CPAtest") %>% # Filter the data so that only data of the testing session is included
+  select(time, stimulus, difference, on)
+
+timetest <- timedata %>% 
+  mutate_if(is.character, as.factor) %>% # Mutate character to factor so that they can be used for t.test
+  group_by(stimulus, on) %>% # Group the data based on which stimulus the subject is tested for (CPA or CPP) and whether the time of testing matches the time of training (ON or OFF)
+  do(tidy(t.test(difference~time, data = .)))  # carry out t.test for all the groups simultaneously
+timetest # Print out multiple t-test results.
+```
+
+
+## 4.2 Effect of the Time of Day on Chamber Preference - Plots
+```{r timeplot, echo=FALSE, warning=FALSE, message=FALSE}
+# Plot out the data as box plots
+timeplot <- timedata %>%
+  ggplot(aes(x=stimulus, y=difference, color=time)) +
+  geom_boxplot(aes(fill=time), outlier.shape=18) +
+  scale_fill_grey()+
+  scale_color_manual(values=c("black", "black")) +
+  labs(x='Stimulus',y='Preference for Paired Chamber (seconds)',title='Mean Preference for the Paired Chamber at Either Testing Time') +
+  facet_wrap(vars(on)) # Generate two separate plots based on whether the time of testing matches the time of training
+timeplot # Print out the plot
+```
